@@ -1,0 +1,157 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<sys/types.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<netinet/in.h>
+#include<assert.h>
+#include<unistd.h>
+
+int fds[64];            //暂且设置可放置64个文件描述符
+const int back_log=5;
+
+void usage(char* argv)
+{ 
+  printf("%s:[ip][port]\n",argv);
+}
+
+int start_up(char* ip,int port)  //创建一个套接字，绑定，检测服务器
+{
+  //sock
+  //1.创建套接字
+  int sock=socket(AF_INET,SOCK_STREAM,0);   
+  if(sock<0)
+  {
+      perror("sock");
+      exit(0);
+  }
+  
+  //2.填充本地 sockaddr_in 结构体（设置本地的IP地址和端口）
+  struct sockaddr_in local;       
+  local.sin_port=htons(port);
+  local.sin_family=AF_INET;
+  local.sin_addr.s_addr=inet_addr(ip);
+
+  //3.bind（）绑定
+  if(bind(sock,(struct sockaddr*)&local,sizeof(local))<0) 
+  {
+      perror("bind");
+      exit(1);
+  }
+  //4.listen（）监听 检测服务器
+  if(listen(sock,back_log)<0)
+  {
+      perror("sock");
+      exit(1);
+  }
+  return sock;    //这样的套接字返回
+}
+
+int main(int argc,char* argv[])                         
+{
+    if(argc!=3)     //检测参数个数是否正确
+    {
+        usage(argv[0]);
+        exit(1);
+    }
+    int port=atoi(argv[2]);
+    char* ip=argv[1];
+
+
+    int done=0;
+    int new_sock=-1;
+    int listen_sock=start_up(ip,port);      //创建一个绑定了本地 ip 和端口号的套接字描述符
+    struct sockaddr_in client;
+    socklen_t len=sizeof(client);    //接受到后
+
+    int max_fd = -1;  //文件描述符最大值
+    fd_set _reads;    //_reads文件描述符集
+    fd_set _writes;   //_writes文件描述符集
+
+    int i=0;
+    int fds_num=sizeof(fds)/sizeof(fds[0]);     //文件描述符的数组
+    for(i=0;i<fds_num;i++)                      //初始化文件描述符数组
+    {
+       fds[i]=-1;
+    }
+    fds[0]=listen_sock;    //将listen_sock写入文件描述符数组之中
+
+    while(!done)
+    {
+        FD_ZERO(&_reads);   //每次循环把_reads,_writes初始化（输入、输出 参数）
+        FD_ZERO(&_writes);
+        struct timeval _timeout={5,0};  //设置等待时间  第一个5秒 第二个0微妙
+        for(i=0;i<fds_num;i++)
+        {
+            if(fds[i]>0)
+            {
+                FD_SET(fds[i],&_reads);   //select要监听的套接字描述符 加到文件描述符集中
+                if(fds[i]>max_fd)
+                {
+                    max_fd=fds[i];
+                }
+            }
+        }
+        switch(select(max_fd+1,&_reads,&_writes,NULL,&_timeout))  //_reads,_writes,_timeout 输入，输出参数
+        {
+            case 0:                  //select输出0 ，表示监听超时
+                printf("timeout\n");
+                break;
+            case -1:                 //select出错
+                perror("select");
+                break;
+            default:                 //_reads（输入输出型参数）文件描述符集中有的
+              {
+                for(i=0;i<fds_num;i++)
+                {
+                  if(fds[i]==listen_sock&&FD_ISSET(fds[i],&_reads)) //select 关注的迎宾 socket 描述符已就绪
+                  {
+                    new_sock=accept(listen_sock,(struct sockaddr*)&client,&len);  //创建新的 socket 描述符
+
+                    if(new_sock<0)
+                    {
+                        perror("new_sock");
+                        continue;
+                    }
+                    printf("get connection...%ld\n",new_sock);
+                    for(i=0;i<fds_num;i++)   //将新的 socket 描述符安排在数组中未被占用的最小位置
+                    {
+                        if(fds[i]==-1)
+                        {
+                            fds[i]=new_sock;
+                            break;
+                        }
+                    }
+                    if(i==fds_num)   //文件描述符个数已达到最大值则忽略
+                    {
+                        close(new_sock);
+                    }
+                  }
+
+                else if(fds[i]>0&&FD_ISSET(fds[i],&_reads))  //select 关注的普通的 socket 描述符
+                {
+                    char buf[1024];
+                    ssize_t _s=read(fds[i],buf,sizeof(buf)-1);
+                    if(_s>0)
+                    {
+                        buf[_s]='\0';
+                        printf("%s\n",buf);
+                    }
+                    else if(_s==0)
+                    {
+                        fds[i] = -1;     //在 _read 文件描述符数组中去掉
+                        printf("client closed\n");
+                    }
+                    else
+                    {
+                        perror("read");
+                    }
+               }
+               else
+               {}
+               }
+            }
+        }
+    }
+return 0;
+}
