@@ -13,6 +13,9 @@
 
 #define SIZE 1024
 
+#define _LINING_
+#define _ZHANG_
+
 //1.可能存在问题
 void usage(const char* argv)
 { 
@@ -36,6 +39,29 @@ void clear_header(int sock)
     }while((ret > 0) && strcmp(buf,"\n") != 0);
 }
 
+static void echo_www(int sock,const char* path,ssize_t size)
+{
+    int fd = open(path,O_RDONLY);
+    if(fd < 0)
+    {
+	echo_errno(sock);
+	return;
+    }
+
+    printf("get a new client %d --> %s...\n",sock,path);
+
+    char status_line[SIZE];
+    sprintf(status_line,"HTTP/1.0 200 OK\r\n\r\n");
+    send(sock,status_line,strlen(status_line),0);   //write
+
+    if(sendfile(sock,fd,NULL,size) < 0)
+    {
+	echo_errno(sock);
+	return;
+    }
+
+    close(fd);
+}
 
 int get_line(int sock,char buf[],int buflen)
 {
