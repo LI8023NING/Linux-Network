@@ -39,6 +39,115 @@ void clear_header(int sock)
     }while((ret > 0) && strcmp(buf,"\n") != 0);
 }
 
+static void exe_cgi(int sock,const char* method,const char* path,const char* query_string)
+{
+    char buf[SIZE];
+    int content_length = -1;
+    int ret = -1;
+    int cgi_input[2];
+    int cgi_output[2]; //两个管道
+    char method_env[SIZE];
+    char query_string_env[SIZE];
+    char content_length_env[SIZE];
+///////////////////////////////////////////////////////
+    printf("method %s\n",method);
+    printf("path %s\n",path);
+    printf("data:%s",query_string);
+///////////////////////////////////////////////////////
+    
+    if(strcasecmp(method,"GET") == 0)
+    {
+	clear_header(sock);
+    }
+    else  //POST情况
+    {
+	do
+	{
+	    ret = get_line(sock,buf,sizeof(buf));
+	    if(strncasecmp(buf,"Content-Length: ",16) == 0)
+	    {
+		content_length = atoi(&buf[16]);
+	    }
+	}while((ret > 0) && (strcmp(buf,"\n") != 0));
+
+	if(content_length == -1)
+	{
+	    echo_errno(sock);
+	    return;
+	}
+    }
+
+    sprintf(buf,"HTTP/1.0 200 OK\r\n\r\n");
+    send(sock,buf,strlen(buf),0);  //发通知给客户端
+
+    if(pipe(cgi_input) < 0)
+    {
+	echo_errno(sock);
+	return;
+    }
+
+    if(pipe(cgi_output) < 0)
+    {
+	echo_errno(sock);
+	return;
+    }
+
+    pid_t id = fork();   //创建子进程
+    if(id == 0)
+    {
+	close(cgi_input[1]);
+	close(cgi_output[0]);
+
+	dup2(cgi_input[0],0);
+	dup2(cgi_output[1],1);
+
+	sprintf(method_env,"REOUEST_METHOD=%s",method);
+	putenv(method_env);
+
+	if(strcasecmp(method,"GET") == 0)
+	{
+	    sprintf(query_string_env,"QUERY_STRING=%s",query_string);
+	    putenv(query_string_env);
+	}
+	else
+	{
+	    sprintf(content_length_env,"CONTENT_LENGTH=%s",content_length);
+	    putenv(content_length_env);
+	}
+
+	execl(path,path,NULL);
+	exit(1);
+    }
+    else   //父
+    {
+	close(cgi_input[0]);
+	close(cgi_output[1]);
+
+	char c = '\0';
+	int i = 0;
+
+	if(strcasecmp(method,"POST") == 0)
+	{
+	    for(; i < content_length; i++)
+	    {
+		recv(sock,&c,1,0);
+		printf("%c",c);
+		write(cgi_input[1],&c,1);
+	    }
+	}
+
+	printf("\n");
+
+	int ret = 0;
+	while((ret = read(cgi_output[0],&c,1)) > 0)
+	{
+	    send(sock,&c,1,0);
+	}
+
+	waitpid(id,NULL,0);
+    }
+}
+
 static void echo_www(int sock,const char* path,ssize_t size)
 {
     int fd = open(path,O_RDONLY);
